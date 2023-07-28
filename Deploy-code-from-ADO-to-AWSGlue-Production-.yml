@@ -1,0 +1,61 @@
+trigger: none
+
+pool:
+  vmImage: windows-latest
+
+steps:
+  - task: AWSPowerShellModuleScript@1
+    inputs:
+      awsCredentials: '[REPLACE AWS PROD ACCOUNT SERVICE CONNECTION]'
+      regionName: '[REPLACE AWS REGION]'
+      scriptType: 'inline'
+      inlineScript: |
+        $jsonTemplate = Get-Content $(System.DefaultWorkingDirectory)\job-template.json
+        
+        function Get-ObjectMember {
+            [CmdletBinding()]
+            Param(
+                [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+                [PSCustomObject]$obj
+            )
+            $obj | Get-Member -MemberType NoteProperty | ForEach-Object {
+                $key = $_.Name
+                [PSCustomObject]@{Key = $key; Value = $obj."$key"}
+            }
+        }
+	#Load Mapping file for Dev and Production S3 Bucket Names for Data file , Glue IAM Role Name        
+        $mappings = Get-Content $(System.DefaultWorkingDirectory)\mapping.json
+        $mappings = $mappings | ConvertFrom-Json
+
+        $mappings | Get-ObjectMember | foreach {
+            $jsonTemplate = $jsonTemplate -replace $_.Key, $_.value
+        }
+        
+        $jsonTemplate = $jsonTemplate | ConvertFrom-Json
+        $jobname = $jsonTemplate.Name
+        #remove unwanted property to avoid conflict
+        $jsonTemplate.PSObject.Properties.Remove("CodeGenConfigurationNodes")
+        
+        $response = aws glue list-jobs --query JobNames
+	#Check Glue Job is already exist in Production Environment
+        if ($response -match $jobname){
+	  #If yes, Remove unwanted property to prepare for Glue Job Update
+          $jsonTemplate.PSObject.Properties.Remove("Name")
+          $jsonBase = @{}
+          $jsonBase.Add("JobName",$jobname)
+          $jsonBase.Add("JobUpdate",$jsonTemplate)
+
+          $jsonBase = $jsonBase | ConvertTo-Json
+          $jsonBase = $jsonBase.Replace("""","`\""")          
+	  #Update Glue Job into AWS Production Account
+          $response = aws glue update-job --cli-input-json "$jsonBase"
+        }
+        else{
+	  #If no, create a new Glue Job in Production Environment
+          $jsonTemplate = $jsonTemplate | ConvertTo-Json
+          $jsonTemplate = $jsonTemplate.Replace("""","`\""")
+          $response = aws glue create-job --cli-input-json "$jsonTemplate"            
+        }
+
+	#Finally, copy the Job Script file to the S3 bucket location
+        aws s3 cp $(System.DefaultWorkingDirectory)\job-script.py $scriptlocation
