@@ -1,0 +1,58 @@
+
+pool: #"AWS Agent"
+  vmImage: windows-latest
+trigger: none
+jobs:
+- job: A
+  steps:  
+  - checkout: self
+    persistCredentials: true
+  - task: AWSPowerShellModuleScript@1
+    displayName: SpecialScript
+    inputs:
+      awsCredentials: '[REPLACE AWS SERVICE CONNECTION]'
+      regionName: '[REPLACE AWS REGION]'
+      scriptType: 'inline'
+      inlineScript: |
+        git config --global user.email "gluejob@pipeline.com"
+        git config --global user.name "gluejob"
+        git status
+        git checkout -b master
+        #List all Glue Jobs from AWS Account
+	$response = aws glue list-jobs
+        $jobs = $response | ConvertFrom-Json
+        
+        foreach($jobName in $jobs.JobNames)
+        {
+          if ($jobName -eq "[REPLACE AWS GLUE JOB NAME]")
+          {
+            #Get Job from AWS Glue
+            $response = aws glue get-job --job-name $jobName;
+            $jobItem = $response | ConvertFrom-Json
+            $jobItem.Job.Name = $jobItem.Job.Name
+            #Drop unwanted parameters
+            $jobItem.Job.PSObject.Properties.Remove("CreatedOn")
+            $jobItem.Job.PSObject.Properties.Remove("LastModifiedOn")
+            $jobItem.Job.PSObject.Properties.Remove("AllocatedCapacity")
+            $jobItem.Job.PSObject.Properties.Remove("MaxCapacity")
+            
+	    #Prepare for Job Template to be written back to Repo
+            $jsonTemplate = ($jobItem.Job | ConvertTo-Json)        
+	    #Replace with escape characters to avoid encoding issue
+            $jsonTemplate = $jsonTemplate.Replace("""","`\""")
+            $jsonTemplate = $jobItem.Job
+	    #AWS Glue Job Script is kept separately in AWS S3 Bucket and it is retrieving the location
+            $scriptlocation = $jobItem.Job.Command.ScriptLocation
+            aws s3 cp $scriptlocation $(System.DefaultWorkingDirectory)\job-script.py
+            Write-Host $scriptlocation
+            $($jsonTemplate | ConvertTo-Json)| Out-File -FilePath $(System.DefaultWorkingDirectory)\job-template.json
+          }
+        }
+	#Once Glue Job Template and Script are ready, it will be checkedin to Azure DevOps Repo
+        git add job-script.py
+        git add job-template.json
+        git commit -m "AWS Glue Job is updated! [skip ci]"
+        git push -u origin master
+    name: UpdateJobTemplate        
+
+          
