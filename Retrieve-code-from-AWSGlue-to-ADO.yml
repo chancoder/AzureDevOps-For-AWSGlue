@@ -10,7 +10,7 @@ jobs:
   - task: AWSPowerShellModuleScript@1
     displayName: SpecialScript
     inputs:
-      awsCredentials: '[REPLACE AWS SERVICE CONNECTION]'
+      awsCredentials: '[REPLACE AWS DEV ACCOUNT SERVICE CONNECTION]'
       regionName: '[REPLACE AWS REGION]'
       scriptType: 'inline'
       inlineScript: |
